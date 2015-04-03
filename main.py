@@ -6,9 +6,9 @@ import cv2
 import math
 from helper_funcs import *
 from background_subtraction import *
-
-import scipy.stats as ss
 import matplotlib.pyplot as plt
+
+
 
 
 # import data
@@ -35,24 +35,29 @@ background_train = x_train[ np.where((y_train == 6) | (y_train == 7))[0], ]
 
 # subtract background from each image
 # train algo on x_train, but apply it to each frame in x
-# NO NEED TO RUN, IT TAKES A WHILE
-# fore_mat, fore_mask = eigenback(x_train, x, back_thres=.15, method='mean', n_components=25, fore_thres=.25)
+# back_vec = background_model(background_train) # takes about 10 sec
+# fore_mask = eigenback(back_vec, x, back_thres=.20, fore_thres=.25, rval='mask') # takes about 30 sec
 
 
 # apply unsupervised clustering on each foreground image in x matrix.
 back_vec = background_model(background_train)
-cluster = Cluster(back_vec)
+cluster = Cluster(back_vec, n_clusters=25, n_components=100)
 cluster = cluster.fit(x_train)
 # cluster_labels = cluster.predict(x_test)
 cluster_labels = cluster.predict(x_train)
 
-test = cluster.cluster.cluster_centers_
-a_cluster = test[10, :]
-test2 = cluster.pca.inverse_transform(a_cluster)
-img = matrix_to_image(test2)
-img = img - img.min()
-img = img * 255 / img.max()
-plt.imshow(img.astype('uint8'), cmap='Greys_r')
+cluster_centers = cluster.cluster.cluster_centers_
+plt.figure(figsize=(20,20))
+for c in range(cluster_centers.shape[0]):
+	a_cluster = cluster_centers[c, :]
+	img_matrix = cluster.pca.inverse_transform(a_cluster)
+	img = matrix_to_image(img_matrix)
+	img = img - img.min()
+	img = img * 255 / img.max()
+	fig_num = c + 1
+	plt.subplot(5,5,fig_num)
+	plt.axis("off")
+	plt.imshow(img.astype('uint8'), cmap='Greys_r')
 plt.show()
 
 

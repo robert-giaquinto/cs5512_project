@@ -13,11 +13,16 @@ The first step, identifying gestures and poses, may prove difficult since our da
 
 
 [1] Isabelle Guyon, Vassilis Athitsos, Pat Jangyodsuk, and Hugo Jair Escalante. The chalearn gesture dataset (cgd 2011). Mach. Vision Appl., 25(8):1929–1951, November 2014.
+
 [2] Isabelle Guyon, Vassilis Athitsos, Pat Jangyodsuk, Ben Hamner, and Hugo Jair Escalante. Chalearn gesture challenge: Design and first results. In CVPR Workshops, pages 1–6. IEEE, 2012.
+
 [3] ChaLearn. Chalearn looking at people 2015 - track 2: Action recognition. https://www.codalab.org/ competitions/2241#participate.
+
 [4] G. Bradski. Computer vision with the opencv library. Dr. Dobb’s Journal of Software Tools, 2000.
+
 [5] Alper Yilmaz, Omar Javed, and Mubarak Shah. Object tracking: A survey. ACM Comput. Surv., 38(4),
 December 2006.
+
 [6] Nhan Nguyen-Duc-Thanh, Sungyoung Lee, and Donghan Kim. Two-stage hidden markov model in gesture recognition for human robot interaction. International Journal of Advanced Robotic Systems, 9(39), 2012.
 <!---[7] Sushmita Mitra and Tinku Acharya. Gesture recognition: A survey. Systems, Man, and Cybernetics, Part C: Applications and Reviews, IEEE Transactions on, 37(3):311–324, 2007.
 [8] Ruben Glatt, José C Freire Jr, and Daniel JBS Sampaio. Proposal for a deep learning architecture for activity recognition. International Journal of Engineering & Technology, 14(5), 2014.

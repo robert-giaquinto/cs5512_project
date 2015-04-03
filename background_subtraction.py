@@ -9,6 +9,8 @@ from scipy.ndimage.measurements import label
 from scipy import ndimage
 from sklearn import preprocessing
 from sklearn.cluster import KMeans
+from skimage import feature
+import time
 
 
 def background_model(x_train, method='mean', n_components=25):
@@ -67,15 +69,18 @@ def foreground_mask(back_vec, x, back_thres=.15):
 	return fore_mask
 
 
-def eigenback(back_vec, x, back_thres=.15, fore_thres=.25):
+def eigenback(back_vec, x, back_thres=.15, fore_thres=.25, rval='fore_mat'):
 	"""
 	This is a modified version of the eigenbackground algorithm
 	this implements the functions that are defined above
 	:param back_vec:
 	:param x:
-	:param back_thres:
-	:param method:
-	:return: the foreground matrix and mask
+	:param back_thres: thresholding parameter. 1 => keep all pixels in image that are
+		different than background model. 0.0001 => only keep pixel that's most
+		different from background.
+	:param fore_thres: thresholding parameter for deciding how big a region in the foreground
+		needs to be in order to not be removed.
+	:return: the foreground matrix or mask
 	"""
 	# use background image to create a foreground mask
 	fore_mask = foreground_mask(back_vec, x, back_thres=back_thres)
@@ -93,22 +98,53 @@ def eigenback(back_vec, x, back_thres=.15, fore_thres=.25):
 		remove_pixel = mask_size[label_im]
 		img[remove_pixel] = 0
 		mask_array[:, :, i] = img
-	fore_mask = image_to_matrix(mask_array)
 
-	# apply foreground mask to each image in the entire video sequence
-	fore_mat = np.multiply(fore_mask, x)
-	return fore_mat
+	if rval == 'fore_mat':
+		# apply foreground mask to each image in the entire video sequence
+		fore_mask = image_to_matrix(mask_array)
+		fore_mat = np.multiply(fore_mask, x)
+		return fore_mat
+	elif rval == 'mask_mat':
+		# just return the mask
+		fore_mask = image_to_matrix(mask_array)
+		return fore_mask
+	elif rval == 'mask_array':
+		# return mask as an array
+		return mask_array
+	else:
+		print 'Must specify rval to be either fore_mat, mask_mat, or mask_array. returning foreground mask by default'
+		fore_mask = image_to_matrix(mask_array)
+		return fore_mask
+
+
+def detect_edges(mask_array, sigma=3):
+	"""
+
+	:param mask_array: a 3D image array of foreground masks
+	:return:
+	"""
+	num_images = mask_array.shape[2]
+	edge_array = np.zeros(mask_array.shape)
+	for i in range(num_images):
+		edge_array[:,:, i] = feature.canny(mask_array[:,:, i], sigma=sigma)
+	return edge_array
 
 
 class Cluster(object):
 	"""
 	TBD
 	Only doing Kmeans clustering right now
+	Before clustering each image has:
+		1. background subtracted
+		2. only contiguous regions of foreground are kept
+		skip: ---# 3. edges of foreground are extracted
+		4. foreground is mapped to a lower dimension using PCA
+		5. finally, the images are clustered
 	"""
 	def __init__(self, back_vec,
 			n_clusters=20,
-			n_components=25,
-			back_thres=.15,
+			n_components=30,
+			back_thres=.20,
 			fore_thres=.25,
 			normalize=False,
 			n_jobs=1):
@@ -132,14 +168,33 @@ class Cluster(object):
 		:param x: an image matrix to train a clustering algorithm on
 		"""
 		# use the background image given to extract foreground from x
-		fore_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres)
+		tstart = time.time()
+		mask_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres, rval='mask_mat')
+		# tend = time.time()
+		# print "foreground mask extracted in", tend - tstart, "seconds."
+		# TOO SLOW, TRY SOMETHING SIMPLER:
+		# mask_mat = foreground_mask(self.back_vec, x, self.back_thres)
+		tend = time.time()
+		print "foreground mask extracted in", tend - tstart, "seconds."
+
+		# detect edges on foreground, convert to a matrix
+		# tstart = time.time()
+		# fore_edges = image_to_matrix(detect_edges(mask_array, sigma=3))
+		# tend = time.time()
+		# print "edges extracted in", tend - tstart, "seconds."
 
 		# map foreground to lower dimension for faster clustering
-		self.pca = RandomizedPCA(n_components=self.n_components).fit(fore_mat)
-		fore_pca = self.pca.transform(fore_mat)
+		tstart = time.time()
+		self.pca = RandomizedPCA(n_components=self.n_components).fit(mask_mat)
+		fore_pca = self.pca.transform(mask_mat)
+		tend = time.time()
+		print "edges mapped to a lower dimension in", tend - tstart, "seconds."
 
 		# apply unsupervised clustering on each image.
+		tstart = time.time()
 		self.cluster = KMeans(n_clusters=self.n_clusters, n_jobs=self.n_jobs).fit(fore_pca)
+		tend = time.time()
+		print "edges clustered in", tend - tstart, "seconds."
 		return self
 
 	def predict(self, x):
@@ -151,14 +206,34 @@ class Cluster(object):
 		if self.cluster is None or self.pca is None:
 			print "fit method must be called first"
 			return 1
+
 		# use the background image given to extract foreground from x
-		fore_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres)
+		tstart = time.time()
+		mask_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres, rval='mask_mat')
+		# tend = time.time()
+		# print "foreground mask extracted in", tend - tstart, "seconds."
+		# TOO SLOW, TRY SOMETHING SIMPLER:
+		# mask_mat = foreground_mask(self.back_vec, x, self.back_thres)
+		tend = time.time()
+		print "foreground mask extracted in", tend - tstart, "seconds."
 
-		# map foreground to lower dimension
-		fore_pca = self.pca.transform(fore_mat)
+		# detect edges on foreground, convert to a matrix
+		# tstart = time.time()
+		# fore_edges = image_to_matrix(detect_edges(mask_array, sigma=3))
+		# tend = time.time()
+		# print "edges extracted in", tend - tstart, "seconds."
 
-		# apply unsupervised clustering on each image.
+		# map foreground to lower dimension using trained pca
+		tstart = time.time()
+		fore_pca = self.pca.transform(mask_mat)
+		tend = time.time()
+		print "edges mapped to a lower dimension in", tend - tstart, "seconds."
+
+		# apply unsupervised clustering on each image using trained model
+		tstart = time.time()
 		cluster_labels = self.cluster.predict(fore_pca)
+		tend = time.time()
+		print "edges clustered in", tend - tstart, "seconds."
 		return cluster_labels
 
 
