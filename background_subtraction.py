@@ -1,18 +1,10 @@
 from __future__ import division
 import numpy as np
-from ChalearnLAPSample import ActionSample
-import os
 import cv2
-from helper_funcs import *
+from helper_funcs import matrix_to_image, image_to_matrix
 from sklearn.decomposition import RandomizedPCA
 from scipy.ndimage.measurements import label
 from scipy import ndimage
-from sklearn.cluster import KMeans, SpectralClustering
-from skimage import feature
-import time
-#from skimage.transform import PiecewiseAffineTransform, warp
-from skimage import transform as tf
-import math
 
 
 def background_model(x_train, method='mean', n_components=10):
@@ -30,7 +22,8 @@ def background_model(x_train, method='mean', n_components=10):
 	# print sum(pca.explained_variance_ratio_)
 	train_pca = pca.transform(x_train)
 
-	# define background as median pixel value in the principal component space
+	# define background as an aggregation of each pixel value in the principal component space
+	# can't see much of a difference between mean and median
 	if method == 'median':
 		back_pca = np.median(train_pca, axis=0)
 	elif method == 'mean':
@@ -75,14 +68,23 @@ def foreground_mask(back_vec, x, back_thres=.25):
 def eigenback(back_vec, x, back_thres=.25, fore_thres=.1, rval='fore_mat', blur=False):
 	"""
 	This is a modified version of the eigenbackground algorithm
-	this implements the functions that are defined above
-	:param back_vec:
-	:param x:
-	:param back_thres: thresholding parameter. 1 => keep all pixels in image that are
-		different than background model. 0.0001 => only keep pixel that's most
-		different from background.
-	:param fore_thres: thresholding parameter for deciding how big a region in the foreground
-		needs to be in order to not be removed.
+	this uses the foreground_mask function above and a background vector
+	created by the background_model function
+	:param back_vec: a vector of the background image (use background_model to find this)
+	:param x: a matrix with 1 row per image frame, each column represents a pixel.
+		This algorithm is applied to this data and background is subtracted from each image
+	:param back_thres: thresholding parameter for deciding what is a significant difference
+		between the input image and the background.
+		I.E what percent of the max background-foreground differences should be kept?
+		.25 is a good default)
+	:param fore_thres: thresholding parameter for deciding how big a region
+		in the foreground needs to be in order to be accepted.
+		The size of foreground regions is calculated based on how many pixels are touching
+		divided the total number of pixels.
+		fore_thres is the ratio of how big a region needs to be, relative to the
+		largest region in order to be accepted.
+		fore_thres = .1 => keep the largest region and any regions that are at least
+		10% as a big as the largest region.
 	:return: the foreground matrix or mask
 	"""
 	# use background image to create a foreground mask
@@ -120,217 +122,6 @@ def eigenback(back_vec, x, back_thres=.25, fore_thres=.1, rval='fore_mat', blur=
 		print 'Must specify rval to be either fore_mat, mask_mat, or mask_array. returning foreground mask by default'
 		fore_mask = image_to_matrix(mask_array)
 		return fore_mask
-
-
-def detect_edges(mask_array, sigma=3):
-	"""
-
-	:param mask_array: a 3D image array of foreground masks
-	:return:
-	"""
-	num_images = mask_array.shape[2]
-	edge_array = np.zeros(mask_array.shape)
-	for i in range(num_images):
-		edge_array[:,:, i] = feature.canny(mask_array[:,:, i], sigma=sigma)
-	return edge_array
-
-
-def rotate_images(img_array, rotation):
-	"""
-	Assuming an image array is given
-	:param img_array: a 3D array of images
-	:param rotation: counter-clockwise rotation in radians (e.g. math.pi / 4)
-	:return:
-	"""
-	# define a rotation matrix (used repeatedly later)
-	rot_mat = np.array([
-		[math.cos(rotation), math.sin(rotation) * -1],
-		[math.sin(rotation), math.cos(rotation)]
-	])
-	# loop through each image and rotate it
-	num_frames = img_array.shape[2]
-	rotated_img_array = np.zeros(img_array.shape)
-	for i in range(num_frames):
-		img = img_array[:, :, i]
-		# find how far the rotation will off-center the image:
-		old_center = image_center(img)
-		new_center = rot_mat.dot(old_center)
-		shift = np.round(np.subtract(old_center, new_center))
-		# transform the image
-		tform = tf.SimilarityTransform(scale=1, rotation=rotation, translation=(shift[0], shift[1]))
-		rotated_img_array[:, :, i] = tf.warp(img, tform)
-		# another option that doesn't require manual translation:
-		#from scipy.ndimage.interpolation import rotate
-		#rotate(img, angle=30, reshape=True)
-	return rotated_img_array
-
-
-def randomly_scale_images(img_array):
-	# loop through each image and rotate it
-	num_frames = img_array.shape[2]
-	scaled_img_array = np.zeros(img_array.shape)
-	for i in range(num_frames):
-		img = img_array[:, :, i]
-
-		# find max amount that the image can be scaled without cropping
-		# sum across rows to get column totals
-		y_total = img.sum(axis=0)
-		y_active = np.where(y_total > 0)[0]
-		y_len = y_active.max() - y_active.min()
-		# sum across columns to get row totals
-		x_total = img.sum(axis=1)
-		x_active = np.where(x_total > 0)[0]
-		x_len = x_active.max() - x_active.min()
-		scale_min = round(1. / (math.floor(min(img.shape[0]/x_len, img.shape[1]/y_len) * 10) / 10), 2)
-		scale_range = np.hstack((np.arange(scale_min, .96, .01), np.arange(1.05, 2 - scale_min + .01, .01)))
-		scale = random.choice(scale_range)
-
-		# scale and save image
-		scaled = scale_image(img, scale)
-		scaled_img_array[:, :, i] = scaled
-	return scaled_img_array
-
-
-def scale_image(img, scale):
-	# convert image to a mask in order to find center
-	img_mask = img.copy()
-	img_mask[img_mask > 0] = 1
-	old_center = image_center(img_mask)
-	new_center = np.round(old_center / scale)
-	shift = np.round(np.subtract(new_center, old_center)).flatten()
-	tform = tf.SimilarityTransform(scale=scale, translation=(shift[0], shift[1]))
-	return tf.warp(img, tform)
-
-
-def image_center(img):
-	"""
-	find the x,y coordinates of the weighted center of an image
-	this is helpful for re-centering images that have been rotated
-	or stretched
-	:param img:
-	:return:
-	"""
-	if not np.allclose(np.sort(np.unique(img)), np.array([0., 1.])):
-		# convert image to a binary mask
-		img[img > 0] = 1
-	# what percent of pixels below to each row?
-	y_weight = img.sum(axis=1) / img.sum()
-	# multiply weight elementwise by the position of the pixel
-	y_weighted_position = np.multiply(y_weight, range(len(y_weight)))
-	# at what y-position are half of the pixels observed?
-	y_center_of_mass = np.where(y_weighted_position.cumsum() > y_weighted_position.sum()/2)[0][0]
-	# repeat for x-value
-	x_weight = img.sum(axis=0) / img.sum()
-	x_weighted_position = np.multiply(x_weight, range(len(x_weight)))
-	x_center_of_mass = np.where(x_weighted_position.cumsum() > x_weighted_position.sum()/2)[0][0]
-	return np.array([[x_center_of_mass], [y_center_of_mass]])
-
-
-class Cluster(object):
-	"""
-	TBD
-	Only doing Kmeans clustering right now
-	Before clustering each image has:
-		1. background subtracted
-		2. only contiguous regions of foreground are kept
-		skip: ---# 3. edges of foreground are extracted
-		4. foreground is mapped to a lower dimension using PCA
-		5. finally, the images are clustered
-	"""
-	def __init__(self, back_vec,
-			n_clusters=30,
-			n_components=50,
-			back_thres=.25,
-			fore_thres=.1,
-			n_jobs=1):
-		# must have parameters:
-		self.back_vec = back_vec
-
-		# optional parameters
-		self.n_clusters = n_clusters
-		self.n_components = n_components
-		self.back_thres = back_thres
-		self.fore_thres = fore_thres
-		self.n_jobs = n_jobs
-
-		# to be assigned in as later
-		self.cluster = None
-		self.pca = None
-
-	def fit(self, x):
-		"""
-		:param x: an image matrix to train a clustering algorithm on
-		"""
-		# use the background image given to extract foreground from x
-		tstart = time.time()
-		mask_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres, rval='mask_mat', blur=True)
-		# tend = time.time()
-		# print "foreground mask extracted in", tend - tstart, "seconds."
-		# TOO SLOW, TRY SOMETHING SIMPLER:
-		# mask_mat = foreground_mask(self.back_vec, x, self.back_thres)
-		tend = time.time()
-		print "foreground mask extracted in", tend - tstart, "seconds."
-
-		# detect edges on foreground, convert to a matrix
-		# tstart = time.time()
-		# fore_edges = image_to_matrix(detect_edges(mask_array, sigma=3))
-		# tend = time.time()
-		# print "edges extracted in", tend - tstart, "seconds."
-
-		# map foreground to lower dimension for faster clustering
-		tstart = time.time()
-		self.pca = RandomizedPCA(n_components=self.n_components).fit(mask_mat)
-		print "Total explained variance:", sum(self.pca.explained_variance_ratio_)
-		fore_pca = self.pca.transform(mask_mat)
-		tend = time.time()
-		print "edges mapped to a lower dimension in", tend - tstart, "seconds."
-
-		# apply unsupervised clustering on each image.
-		tstart = time.time()
-		self.cluster = KMeans(n_clusters=self.n_clusters, n_jobs=self.n_jobs).fit(fore_pca)
-		tend = time.time()
-		print "edges clustered in", tend - tstart, "seconds."
-		return self
-
-	def predict(self, x):
-		"""
-		SHOULD RETURN IMAGE FOREGROUND TOO?
-		:param x: lookup nearest cluster based on images used to train model (from fit)
-		:return: clustering labels, one for each row of x
-		"""
-		if self.cluster is None or self.pca is None:
-			print "fit method must be called first"
-			return 1
-
-		# use the background image given to extract foreground from x
-		tstart = time.time()
-		mask_mat = eigenback(self.back_vec, x, self.back_thres, self.fore_thres, rval='mask_mat', blur=True)
-		# tend = time.time()
-		# print "foreground mask extracted in", tend - tstart, "seconds."
-		# TOO SLOW, TRY SOMETHING SIMPLER:
-		# mask_mat = foreground_mask(self.back_vec, x, self.back_thres)
-		tend = time.time()
-		print "foreground mask extracted in", tend - tstart, "seconds."
-
-		# detect edges on foreground, convert to a matrix
-		# tstart = time.time()
-		# fore_edges = image_to_matrix(detect_edges(mask_array, sigma=3))
-		# tend = time.time()
-		# print "edges extracted in", tend - tstart, "seconds."
-
-		# map foreground to lower dimension using trained pca
-		tstart = time.time()
-		fore_pca = self.pca.transform(mask_mat)
-		tend = time.time()
-		print "edges mapped to a lower dimension in", tend - tstart, "seconds."
-
-		# apply unsupervised clustering on each image using trained model
-		tstart = time.time()
-		cluster_labels = self.cluster.predict(fore_pca)
-		tend = time.time()
-		print "edges clustered in", tend - tstart, "seconds."
-		return cluster_labels
-
 
 
 

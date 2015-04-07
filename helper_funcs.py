@@ -2,7 +2,6 @@ import numpy as np
 from ChalearnLAPSample import ActionSample
 import os
 import cv2
-from sklearn.decomposition import PCA
 import random
 
 # def scale_a_feature(x):
