@@ -122,6 +122,7 @@ def matrix_to_image(mat, n_rows=360, n_cols=480):
 		img_array = mat.reshape(n_rows, n_cols)
 	return img_array
 
+
 def image_to_matrix(img_array):
 	"""
 	Convert a 3D image array to a 2D matrix

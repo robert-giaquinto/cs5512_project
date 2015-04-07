@@ -40,8 +40,8 @@ background_train = x_train[ np.where((y_train == 6) | (y_train == 7))[0], ]
 
 
 # apply unsupervised clustering on each foreground image in x matrix.
-back_vec = background_model(background_train)
-cluster = Cluster(back_vec, n_clusters=25, n_components=100)
+back_vec = background_model(background_train, method='mean', n_components=10)
+cluster = Cluster(back_vec, n_clusters=30, n_components=50)
 cluster = cluster.fit(x_train)
 # cluster_labels = cluster.predict(x_test)
 cluster_labels = cluster.predict(x_train)
