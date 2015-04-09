@@ -7,35 +7,108 @@ from background_subtraction import background_model, foreground_mask, eigenback
 
 
 # TODO: write wrapper function to build out the artifical training data set using functions below.
-def distorted_image_set(x_train):
-	print "TBD"
+def distorted_image_set(x_train, y_train, num_runs):
+	"""
+
+	:param x_train:
+	:param y_train:
+	:param num_runs: how many copies of the data set should be made
+	:return:
+	"""
+	# convert x_train to an image array
+
+	distorted_images = np.zeros([])
+
+
 	return distorted_images
 
 
-def randomly_rotate_images(img_array):
+def randomly_distort_images(img_array):
 	"""
-	This function takes an image array and, for each image, the image is rotated
+	1. This function takes an image array and, for each image, the image is rotated
 	by some random amount between 45 and -45 degrees,
-	each image is then returned as part of an imaged array
+	each image is then returned as part of an imaged array.
+
+	2.  function takes an image array and, for each image, finds the most that it
+	could be enlarged without cropping the image. The image is then re-scaled
+	by some random amount and returned as part of an imaged array
+
+	3. function translates image to a random position without cropping
+
 	:param img_array: a 3D array of images
 	:return: a 3D image array where each image from input has been rotated by
 		some reasonable amount.
 	"""
 	# loop through each image and rotate it
 	num_frames = img_array.shape[2]
-	rotated_img_array = np.zeros(img_array.shape)
+	distorted_img_array = np.zeros(img_array.shape)
 	for i in range(num_frames):
+		# 0. begin by centering the foreground in the middle of the frame
 		img = img_array[:, :, i]
+		old_center = image_center(img) # (row, col)
+		frame_center = np.array([[img.shape[0]/2], [img.shape[1]/2]])
+		shift = np.round(np.subtract(frame_center, old_center))
+		trans_tform = tf.SimilarityTransform(scale=1, translation=(shift[1], shift[0]))
+		img = tf.warp(img, trans_tform.inverse)
 
-		# randomly select a rotation angle betwen -45 to 45 degrees
-		rotation_range = (np.hstack((np.arange(-45, -4, 1), np.arange(5, 46, 1)))/360) * 2 * math.pi
+		# 1. randomly select a rotation amount
+		# randomly select a rotation angle between -40 to 41 degrees
+		rotation_range = (np.arange(-30, 31, 1)/360) * 2 * math.pi
 		rotation = random.choice(rotation_range)
-
-		# rotate the image and save the restult
+		# rotate the image and save the result
 		rotated_img = rotate_image(img, rotation=rotation)
-		rotated_img_array[:, :, i] = rotated_img
 
-	return rotated_img_array
+		# 2. randomly select a reasonable scaling amount
+		# find max amount that the image can be scaled without cropping
+		# sum across columns to find row active in foreground
+		row_total = rotated_img.sum(axis=1)
+		row_active = np.where(row_total > 0)[0]
+		# what is range of active pixels?
+		row_len = row_active.max() - row_active.min()
+		# sum across rows to find columns active in foreground
+		col_total = rotated_img.sum(axis=0)
+		col_active = np.where(col_total > 0)[0]
+		# what is range of active pixels?
+		col_len = col_active.max() - col_active.min()
+		# at very most, increase by half (and never get within 10% of border)
+		scale_max = min(1.5, math.floor(min(img.shape[0]/(1.1*row_len), img.shape[1]/(1.1*col_len)) * 10) / 10)
+		# at most, shrink by a half
+		scale_range = np.arange(.5, scale_max + .01, .01)
+		if len(scale_range) != 0:
+			scale = round(random.choice(scale_range), 2)
+			rotated_scaled_img = scale_image(rotated_img, scale)
+		else:
+			rotated_scaled_img = rotated_img
+
+		# 3. randomly translate the image such that no cropping occurs
+		# y_shift = reasonable translations along vertical axis
+		row_total = rotated_scaled_img.sum(axis=1)
+		row_active = np.where(row_total > 0)[0]
+		y_shift_range = np.hstack((
+			np.arange(-1, -1 * row_active.min(), -5),
+			np.arange(1, img.shape[0] - row_active.max(), 5)
+		))
+		# x_shift = reasonable translations along horizontal axis
+		col_total = rotated_scaled_img.sum(axis=0)
+		col_active = np.where(col_total > 0)[0]
+		x_shift_range = np.hstack((
+			np.arange(-1, -1 * col_active.min(), -5),
+			np.arange(1, img.shape[1] - col_active.max(), 5)
+		))
+		# randomly select a pair of reasonable shifts in either direction
+		if len(y_shift_range) != 0:
+			y_shift = random.choice(y_shift_range)
+		else:
+			y_shift = 0
+		if len(x_shift_range) != 0:
+			x_shift = random.choice(x_shift_range)
+		else:
+			x_shift = 0
+		distorted_img = translate_image(rotated_scaled_img, (x_shift, y_shift))
+
+		# save final results
+		distorted_img_array[:, :, i] = distorted_img
+	return distorted_img_array
 
 
 def rotate_image(img, rotation):
@@ -47,56 +120,38 @@ def rotate_image(img, rotation):
 	:param rotation: counter-clockwise rotation in radians (e.g. math.pi / 4)
 	:return:
 	"""
+	# need to pad the image before scaling it
+	pad_width = 250
+	padded_img = np.lib.pad(img, pad_width, pad_image)
+
 	# define a rotation matrix
 	rot_mat = np.array([
 			[math.cos(rotation), math.sin(rotation) * -1],
 			[math.sin(rotation), math.cos(rotation)]
 		])
 	# find how far the rotation will off-center the image:
-	old_center = image_center(img)
-	new_center = rot_mat.dot(old_center)
-	shift = np.round(np.subtract(old_center, new_center))
-	# transform the image
-	tform = tf.SimilarityTransform(scale=1, rotation=rotation, translation=(shift[0], shift[1]))
-	# another option that doesn't require manual translation:
-	#from scipy.ndimage.interpolation import rotate
-	#rotate(img, angle=30, reshape=True)
-	return tf.warp(img, tform)
+	img_center = np.array([[padded_img.shape[0]/2], [padded_img.shape[1]/2]]) # (row, col)
+	old_center = image_center(padded_img) # (row, col)
+	rotated_center = rot_mat.T.dot(old_center)
+	# translate the result so the center of mass is in center of image
+	shift = np.round(np.subtract(rotated_center, img_center))
+	# rotate then transform the image
+	rot_tform = tf.SimilarityTransform(rotation=rotation)
+	trans_tform = tf.SimilarityTransform(translation=(shift[0], shift[1]))
+	padded_rotated_img = tf.warp(tf.warp(padded_img, rot_tform.inverse), trans_tform.inverse)
+	# unpad the image
+	return unpad_image(padded_rotated_img, pad_width)
 
 
-def randomly_scale_images(img_array):
-	"""
-	This function takes an image array and, for each image, finds the most that it
-	could be enlarged without cropping the image. The image is then re-scaled
-	by some random amount and returned as part of an imaged array
-	:param img_array:
-	:return: an image array, where each element corresponds to an image from input
-		image array -- except each image has been re-scaled by a random amount
-	"""
-	# loop through each image and re-scale it
-	num_frames = img_array.shape[2]
-	scaled_img_array = np.zeros(img_array.shape)
-	for i in range(num_frames):
-		img = img_array[:, :, i]
+def pad_image(img, pad_width, iaxis, kwargs):
+	img[:pad_width[0]] = 0
+	img[-pad_width[1]:] = 0
+	return img
 
-		# find max amount that the image can be scaled without cropping
-		# sum across rows to find columns active in foreground
-		y_total = img.sum(axis=0)
-		y_active = np.where(y_total > 0)[0]
-		y_len = y_active.max() - y_active.min()
-		# sum across columns to find row active in foreground
-		x_total = img.sum(axis=1)
-		x_active = np.where(x_total > 0)[0]
-		x_len = x_active.max() - x_active.min()
-		# for some reason the scaling factor needs to be inverted (i.e. 1 / scale)
-		scale_min = round(1. / (math.floor(min(img.shape[0]/x_len, img.shape[1]/y_len) * 10) / 10), 2)
-		scale_range = np.hstack((np.arange(scale_min, .96, .01), np.arange(1.05, 2 - scale_min + .01, .01)))
-		scale = random.choice(scale_range)
 
-		# scale and save image
-		scaled = scale_image(img, scale)
-		scaled_img_array[:, :, i] = scaled
-	return scaled_img_array
+def unpad_image(img, pad_width):
+	old_shape = (img.shape[0] - (2 * pad_width), img.shape[1] - (2 * pad_width))
+	return img[pad_width:(pad_width + old_shape[0]), pad_width:(pad_width + old_shape[1])]
 
 
 def scale_image(img, scale):
@@ -109,12 +164,26 @@ def scale_image(img, scale):
 		e.g. to increase size by 25%, scale = 1/1.25
 	:return:
 	"""
-	# convert image to a mask in order to find center
-	old_center = image_center(img)
-	new_center = np.round(old_center / scale)
-	shift = np.round(np.subtract(new_center, old_center)).flatten()
-	transformation = tf.SimilarityTransform(scale=scale, translation=(shift[0], shift[1]))
-	return tf.warp(img, transformation)
+	# need to pad the image before scaling it
+	pad_width = max(int(round((max(img.shape) * scale) - max(img.shape))), 250)
+	padded_img = np.lib.pad(img, pad_width, pad_image)
+	transformation = tf.SimilarityTransform(scale=scale)
+	padded_scaled_img = tf.warp(padded_img, transformation.inverse)
+
+	# next, determine how much to translate the image to keep it centered
+	current_center = image_center(padded_scaled_img) # (row, col)
+	desired_center = image_center(padded_img) # (row, col)
+	shift = np.round(np.subtract(desired_center, current_center))
+	# translate image to back to center
+	transformation = tf.SimilarityTransform(translation=(shift[0], shift[1]))
+	padded_centered_img = tf.warp(padded_scaled_img, transformation.inverse)
+	# unpad the image back to its original dimensions and return it
+	return unpad_image(padded_centered_img, pad_width)
+
+
+def translate_image(img, translation):
+	transformation = tf.SimilarityTransform(scale=1, translation=translation)
+	return tf.warp(img, transformation.inverse)
 
 
 def image_center(img):
@@ -123,17 +192,15 @@ def image_center(img):
 	this is helpful for re-centering images that have been rotated
 	or stretched
 	:param img: a foreground image, dimensions = x-pixels by y-pixels
+	:param weighted: if true then it gives center of mass, otherwise it's unweighted
 	:return:
 	"""
 	# what percent of pixels below to each row?
 	foreground_size = np.count_nonzero(img)
-	y_weight = (img != 0).sum(axis=1) / foreground_size
-	# multiply weight element-wise by the position of the pixel
-	y_weighted_position = np.multiply(y_weight, range(len(y_weight)))
+	row_weight = (img != 0).sum(axis=1) / foreground_size
 	# at what y-position are half of the pixels observed?
-	y_center_of_mass = np.where(y_weighted_position.cumsum() > y_weighted_position.sum()/2)[0][0]
+	row_center_of_mass = np.where(row_weight.cumsum() >= 0.5)[0][0]
 	# repeat for x-value
-	x_weight = (img != 0).sum(axis=0) / foreground_size
-	x_weighted_position = np.multiply(x_weight, range(len(x_weight)))
-	x_center_of_mass = np.where(x_weighted_position.cumsum() > x_weighted_position.sum()/2)[0][0]
-	return np.array([[x_center_of_mass], [y_center_of_mass]])
+	col_weight = (img != 0).sum(axis=0) / foreground_size
+	col_center_of_mass = np.where(col_weight.cumsum() >= 0.5)[0][0]
+	return np.array([[row_center_of_mass], [col_center_of_mass]])

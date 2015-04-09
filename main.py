@@ -6,6 +6,9 @@ import cv2
 import math
 from helper_funcs import *
 from background_subtraction import *
+from image_distortion import *
+from cluster_images import Cluster
+
 import matplotlib.pyplot as plt
 
 
@@ -35,22 +38,54 @@ background_train = x_train[ np.where((y_train == 6) | (y_train == 7))[0], ]
 
 # subtract background from each image
 # train algo on x_train, but apply it to each frame in x
-# back_vec = background_model(background_train) # takes about 10 sec
-# fore_mask = eigenback(back_vec, x, back_thres=.20, fore_thres=.25, rval='mask') # takes about 30 sec
+back_vec = background_model(background_train) # takes about 10 sec
+img_array = eigenback(back_vec, x_train, back_thres=.25, fore_thres=.1, rval='mask_array', blur=True) # takes about 30 sec
+# create a dataset of distorted images
+import time
+tstart = time.time()
+training_set = randomly_distort_images(img_array)
+tend = time.time()
+print "Time to process", img_array.shape[2], "images =", round(tend - tstart, 3)
+
+fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(ncols=3, nrows=2)
+ax1.imshow(training_set[:,:, 0])
+ax2.imshow(training_set[:,:, 1])
+ax3.imshow(training_set[:,:, 2])
+ax4.imshow(training_set[:,:, 3])
+ax5.imshow(training_set[:,:, 4])
+ax6.imshow(training_set[:,:, 5])
+plt.show()
+
+# cluster the image distortions
+mask_mat = image_to_matrix(training_set)
+pca = RandomizedPCA(n_components=50).fit(mask_mat)
+print "Total explained variance:", sum(pca.explained_variance_ratio_)
+fore_pca = pca.transform(mask_mat)
+
+# apply unsupervised clustering on each image.
+cluster = KMeans(n_clusters=30).fit(fore_pca)
+cluster_labels = cluster.predict(fore_pca)
+
+
+
+
+
+
+# OLD:
 
 
 # apply unsupervised clustering on each foreground image in x matrix.
-back_vec = background_model(background_train, method='mean', n_components=10)
-cluster = Cluster(back_vec, n_clusters=30, n_components=50)
-cluster = cluster.fit(x_train)
-# cluster_labels = cluster.predict(x_test)
-cluster_labels = cluster.predict(x_train)
+# back_vec = background_model(background_train, method='mean', n_components=10)
+# cluster = Cluster(back_vec, n_clusters=30, n_components=50)
+# cluster = cluster.fit(x_train)
+# # cluster_labels = cluster.predict(x_test)
+# cluster_labels = cluster.predict(x_train)
 
-cluster_centers = cluster.cluster.cluster_centers_
+cluster_centers = cluster.cluster_centers_
 plt.figure(figsize=(20,20))
-for c in range(cluster_centers.shape[0]):
+for c in range(25):
 	a_cluster = cluster_centers[c, :]
-	img_matrix = cluster.pca.inverse_transform(a_cluster)
+	img_matrix = pca.inverse_transform(a_cluster)
 	img = matrix_to_image(img_matrix)
 	img = img - img.min()
 	img = img * 255 / img.max()
