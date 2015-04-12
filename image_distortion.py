@@ -3,24 +3,34 @@ import math
 import random
 import numpy as np
 from skimage import transform as tf
+from helper_funcs import matrix_to_image, image_to_matrix
 from background_subtraction import background_model, foreground_mask, eigenback
 
 
-# TODO: write wrapper function to build out the artifical training data set using functions below.
-def distorted_image_set(x_train, y_train, num_runs):
+def distorted_image_set(imgs, labels, num_runs=10):
 	"""
+	Take a set of images and randomly distort them num_runs times.
+	The result should be a training data set that is more robust to new images
 
-	:param x_train:
-	:param y_train:
+	:param imgs: a 3D array of images to be distorted and turned into a training data set
+	:param labels: a vector of classification labels for each image in imgs
 	:param num_runs: how many copies of the data set should be made
-	:return:
+	:return: x, y
+		x = the training data set which has each image in imgs distorted num_runs
+			times, and transformed into a matrix
+		y = the labels for each image, repeated num_runs times
 	"""
 	# convert x_train to an image array
-
-	distorted_images = np.zeros([])
-
-
-	return distorted_images
+	num_imgs = imgs.shape[2]
+	distorted_img_array = np.zeros([imgs.shape[0], imgs.shape[1], num_imgs * num_runs])
+	for r in range(num_runs):
+		start_index = r * num_imgs
+		end_index = start_index + num_imgs
+		distorted_img_array[:, :, start_index:end_index] = randomly_distort_images(imgs)
+		print "done with run", r
+	x = image_to_matrix(distorted_img_array)
+	y = np.repeat(labels, num_runs)
+	return x, y
 
 
 def randomly_distort_images(img_array):
