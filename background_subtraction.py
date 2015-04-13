@@ -104,6 +104,7 @@ def eigenback(back_vec, x, back_thres=.25, fore_thres=.1, rval='fore_mat', blur=
 		img[remove_pixel] = 0
 		if blur == True:
 			img = cv2.GaussianBlur(img, (15, 15), 0)
+			img /= img.max()
 		mask_array[:, :, i] = img
 
 	if rval == 'fore_mat':

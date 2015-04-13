@@ -7,7 +7,7 @@ from helper_funcs import matrix_to_image, image_to_matrix
 from background_subtraction import background_model, foreground_mask, eigenback
 
 
-def distorted_image_set(imgs, labels, num_runs=10):
+def distorted_image_set(imgs, labels, num_runs=10, data_dir=None):
 	"""
 	Take a set of images and randomly distort them num_runs times.
 	The result should be a training data set that is more robust to new images
@@ -22,15 +22,28 @@ def distorted_image_set(imgs, labels, num_runs=10):
 	"""
 	# convert x_train to an image array
 	num_imgs = imgs.shape[2]
-	distorted_img_array = np.zeros([imgs.shape[0], imgs.shape[1], num_imgs * num_runs])
+	if data_dir is None:
+		distorted_matrix = np.zeros([num_imgs * num_runs, imgs.shape[0] * imgs.shape[1]])
+
 	for r in range(num_runs):
-		start_index = r * num_imgs
-		end_index = start_index + num_imgs
-		distorted_img_array[:, :, start_index:end_index] = randomly_distort_images(imgs)
+		distorted = image_to_matrix(randomly_distort_images(imgs))
+		if data_dir is not None:
+			# save result to disk
+			if r == 0:
+				np.savetxt(data_dir + "distorted_matrix.csv", distorted, fmt='%1.3f', delimiter=",")
+			else:
+				with open(data_dir + "distorted_matrix.csv", 'a') as f_handle:
+					np.savetxt(f_handle, distorted, fmt='%1.3f', delimiter=",")
+		else:
+			# store in a matrix
+			start_index = r * num_imgs
+			end_index = start_index + num_imgs
+			distorted_matrix[start_index:end_index, :] = distorted
 		print "done with run", r
-	x = image_to_matrix(distorted_img_array)
-	y = np.repeat(labels, num_runs)
-	return x, y
+
+	if data_dir is None:
+		y = np.repeat(labels, num_runs)
+		return distorted_matrix, y
 
 
 def randomly_distort_images(img_array):
