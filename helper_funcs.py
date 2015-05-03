@@ -4,19 +4,6 @@ import os
 import cv2
 import random
 
-# def scale_a_feature(x):
-# 	if np.std(x) == 0.0:
-# 		return x
-# 	else:
-# 		return (x - np.mean(x)) / np.std(x)
-#
-# def scale(X):
-# 	num_feats = X.shape[1]
-# 	rval = np.zeros((X.shape[0], num_feats))
-# 	for f in range(num_feats):
-# 		rval[:, f] += scale_a_feature(X[:, f])
-# 	return rval
-
 
 def load_all_videos(data_dir):
 	"""
@@ -39,10 +26,11 @@ def load_all_videos(data_dir):
 	y = None
 	num_frames = 0 # store number of frames in each video
 	video_lookup = {}
+	action_lookup = {}
 	for f in file_names:
 		seq = f[:-4]
 		# load a video and convert to an frame matrix
-		video_matrix, video_labels = load_frame_matrix(f, data_dir)
+		video_matrix, video_labels, action_labels = load_frame_matrix(f, data_dir)
 		# save the video in a larger matrix
 		try:
 			x = np.vstack((x, video_matrix))
@@ -57,7 +45,8 @@ def load_all_videos(data_dir):
 		else:
 			video_lookup[seq] = [num_frames, num_frames + video_matrix.shape[0]-1]
 			num_frames += video_matrix.shape[0]
-	return x, y, video_lookup
+		action_lookup[seq] = action_labels
+	return x, y, video_lookup, action_lookup
 
 
 
@@ -74,7 +63,6 @@ def load_frame_matrix(file_name, data_dir):
 	# read in ground truth seqXX_labels.csv
 	# columns: ActorID, ActionID, StartFrame, EndFrame
 	seq_labels = np.array(actionSample.getActions())
-	# note frames start at zero!
 
 	# loop through each frame in the mp4 video
 	num_frames = actionSample.getNumFrames()
@@ -100,7 +88,7 @@ def load_frame_matrix(file_name, data_dir):
 	keep_rows = np.where(all_y != 0)[0]
 	x = all_x[keep_rows, :]
 	y = all_y[keep_rows]
-	return x, y.reshape((len(y), 1))
+	return x, y.reshape((len(y), 1)), seq_labels
 
 
 def matrix_to_image(mat, n_rows=360, n_cols=480):
@@ -135,47 +123,36 @@ def image_to_matrix(img_array):
 	return rval
 
 
-def split(x, y, pct_train=.5):
-	"""
-	Split the data set into a training and test set
-	starting with simple approach, can make this more robust later
-	for now, just use first 50% of row as training
-	:param x:
-	:param y:
-	:param pct_train:
-	:return:
-	"""
-	num_rows = x.shape[0]
-	x_train = x[0:round(num_rows * pct_train), ]
-	x_test = x[round(num_rows * pct_train):, ]
-	y_train = y[0:round(num_rows * pct_train), ]
-	y_test = y[round(num_rows * pct_train):, ]
-	return x_train, y_train, x_test, y_test
+
+# create an action id for each row of x
+def label_action_ids(y, n=1):
+	ids = np.ones(len(y) * n)
+	for n in range(n):
+		for i in range(len(y)):
+			ind = i + (n * len(y))
+			if i == 0 and n == 0:
+				ids[ind] = 1
+			elif i == 0 and n > 0:
+				# starting distortions, so increment id
+				ids[ind] = ids[ind-1] + 1
+			else:
+				if y[i] == y[i-1]:
+					# unchanged action, so keep same id
+					ids[ind] = ids[ind-1]
+				else:
+					# new action appeared, increment id
+					ids[ind] = ids[ind-1] + 1
+	return ids
 
 
-def k_fold(y, k):
-	"""
-	given the target variable y (a numpy array),
-	and number of folds k (int),
-	this returns a list of length k sublists each containing the
-	row numbers of the items in the training set
-	NOTE: THIS IS STRATAFIED K-FOLD CV (i.e. classes remained balanced)
-	"""
-	targets = np.unique(y)
-	rval = []
-	for fold in range(k):
-		in_train = []
-		for tar in targets:
-			# how many can be select from?
-			num_in_this_class = len(y[y == tar])
-
-			# how many will be selected
-			num_in_training = int(round(num_in_this_class * (k-1)/k))
-
-			# indices of those who can be selected
-			in_this_class = np.where(y == tar)[0]
-
-			# add selected indices to the list of training samples
-			in_train += random.sample(in_this_class, num_in_training)
-		rval.append(np.array(in_train))
-	return np.array(rval)
+# compute the max number of frames per action
+def get_max_frames(action_lookup):
+	max_frames = 0
+	# loop through each video
+	for k in action_lookup.keys():
+		action_dict = action_lookup[k]
+		# loop through each action
+		for a in range(action_dict.shape[0]):
+			num_frames = action_dict[a, 3] - action_dict[a, 2]
+			max_frames = max(num_frames, max_frames)
+	return max_frames

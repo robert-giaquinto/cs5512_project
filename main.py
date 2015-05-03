@@ -8,25 +8,32 @@ from helper_funcs import *
 from background_subtraction import *
 from image_distortion import *
 from cluster_images import Cluster
-import time
-import matplotlib.pyplot as plt
 
 
 # import data
 data_dir = '/Users/robert/documents/umn/5512_AI2/project/data/train/'
 # data_dir = 'C:\\Users\\VAIO\\Desktop\\Spring 2015\\AI2\\Project\\code\\data\\'
 file_names = [f for f in os.listdir(data_dir) if f.endswith('.zip')]
-x, y, video_lookup = load_all_videos(data_dir)
+x, y, video_lookup, action_lookup = load_all_videos(data_dir)
+
+
+# DEVELOPMENT: LIMIT DATA SIZE
+x_train = x[ np.where((y == 1) | (y == 2))[0], ]
+y_train = y[ np.where((y == 1) | (y == 2))[0], ]
+x_train.shape
+
 # split video into training and test
 # x_train = x[0:1956, :].astype(np.float16)
 # x_test = x[1957:3092, :].astype(np.float16)
 # y_train = y[0:1956, :].astype(np.float16)
 # y_test = y[1957:3092, :].astype(np.float16)
 
-# DEVELOPMENT: LIMIT DATA SIZE
-x_train = x[ np.where((y == 1) | (y == 2))[0], ]
-y_train = y[ np.where((y == 1) | (y == 2))[0], ]
-x_train.shape
+
+# set global parameters based on video meta data
+num_actions = 11
+max_frames = get_max_frames(action_lookup)
+
+
 
 
 # (using walk and run actions as training the background model)
@@ -35,80 +42,92 @@ background_train = x[ np.where((y == 6) | (y == 7))[0], ]
 background_train.shape
 
 # find background image
-back_vec = background_model(background_train) # takes about 10 sec
+back_vec = background_model(background_train)
 # subtract background from each image, return an image array
-img_array = eigenback(back_vec, x_train, back_thres=.25, fore_thres=.1, rval='mask_array', blur=True) # takes about 30 sec
-
+img_array = eigenback(back_vec, x_train, back_thres=.25, fore_thres=.1, rval='mask_array', blur=True)
+img_array.shape
 
 # create a dataset of distorted images, save them to disk
-tstart = time.time()
-distorted_image_set(img_array, y_train, 2, data_dir=data_dir)
-# training_set, training_labels = distorted_image_set(img_array, y_train, 10)
-tend = time.time()
-print "Time to process images =", round(tend - tstart, 3)
+num_distortions = 2
+distorted_image_set(img_array, y_train, num_distortions, data_dir=data_dir)
 
 # import csv's
 training_set = np.loadtxt(data_dir + "distorted_matrix.csv", delimiter=',', dtype=np.float16)
-training_labels = np.repeat(y_train, 2)
-del x, y
+training_labels = np.tile(y_train, [num_distortions, 1])
+# del x, y
+# give new distorted images a new id
+training_ids = label_action_ids(y_train, num_distortions)
+
 
 
 # use clustering class to reduce dimensionality and cluster the training set
-cluster = Cluster(n_clusters=16, n_components=25, n_jobs=1)
-cluster = cluster.fit(training_set)
-print "Total explained variance:", sum(cluster.dim_reduc.explained_variance_ratio_)
+clustering = Cluster(n_clusters=16, n_components=25, n_jobs=1, method="KernelPCA")
+clustering = clustering.fit(training_set)
 
-cluster = Cluster(n_clusters=16, n_components=25, n_jobs=1, method="IncrementalPCA")
-cluster = cluster.fit(training_set)
-print "Total explained variance:", sum(cluster.dim_reduc.explained_variance_ratio_)
+# apply methods to training/test set
+training_clusters = clustering.predict(training_set)
+training_frames = np.vstack((training_labels.reshape(710), training_clusters, training_ids)).T.astype(np.uint8)
 
-cluster = Cluster(n_clusters=16, n_components=25, n_jobs=1, method="KernelPCA")
-cluster = cluster.fit(training_set)
-
-cluster = Cluster(n_clusters=16, n_components=25, n_jobs=1, method="LDA")
-cluster = cluster.fit(training_set, training_labels)
+# transpose out_data into wide format
+# use a sliding window to split each action sequence into a fixed number
+# of frames
+window_sz = 10
 
 
-# apply methods to trainig/test set
-training_clusters = cluster.predict(training_set)
-output = np.vstack((training_labels, training_clusters)).T.astype(np.uint8)
+def freq(x):
+	y = np.bincount(x)
+	ii = np.nonzero(y)[0]
+	return zip(ii, y[ii])
+
+
+def count_windows(action_freq, window_sz):
+	num_obs = 0
+	for f in action_freq:
+		num_obs += f[1] - window_sz + 1
+	return num_obs
+
+
+# loop through actions and frames and put data in wide
+# sliding window format
+def sliding_window(training_frames, window_sz):
+	# initialize output data:
+	# how many frames make up each action?
+	action_freq = freq(training_frames[:,2])
+	num_obs = count_windows(action_freq, window_sz)
+	rval = np.zeros([num_obs, window_sz+1])
+
+	# loop through each action
+	frames_processed = 0
+	out_index = 0
+	for a in action_freq:
+		num_frames = a[1]
+		action = training_frames[frames_processed, 0]
+		if num_frames < window_sz:
+			# need to repeat some of the frames
+			start = frames_processed
+			end = frames_processed + num_frames
+			seq = training_frames[start:end, 1]
+			times_repeated = math.floor(window_sz / num_frames)
+			remainder = window_sz % num_frames
+			cluster_sequence = np.hstack((np.tile(seq, times_repeated), seq[0:remainder]))
+			rval[out_index, :] = np.hstack((action, cluster_sequence))
+			out_index += 1
+		else:
+			# set up sliding window
+			num_windows = num_frames - window_sz + 1
+			for w in range(num_windows):
+				# what is start and end index of current window?
+				start = frames_processed + w
+				end = frames_processed + w + window_sz
+				rval[out_index, :] = np.hstack((action, training_frames[start:end, 1]))
+				out_index += 1
+		frames_processed += num_frames
+	return rval
+
+output = sliding_window(training_frames, window_sz)
+
 # save clusters to csv file
 np.savetxt(data_dir + "kernelPCA_training.csv", output, fmt='%d', delimiter=",")
 
 
 
-
-# TODO: SELECT images that are closest to the centroids, plot those.
-# plot some of the clusters
-cluster_centers = cluster.cluster.cluster_centers_
-plt.figure(figsize=(20,20))
-for c in range(16):
-	a_cluster = cluster_centers[c, :]
-	img_matrix = cluster.dim_reduc.inverse_transform(a_cluster)
-	img = matrix_to_image(img_matrix)[:,:,0]
-	img = img - img.min()
-	img = img * 255 / img.max()
-	fig_num = c + 1
-	plt.subplot(4,4,fig_num)
-	plt.axis("off")
-	plt.imshow(img.astype('uint8'), cmap='Greys_r')
-	plt.title('cluster' + str(c))
-plt.suptitle('LDA')
-plt.show()
-
-
-
-
-# what is the frequency of each cluster and true action?
-names = ('wave', 'point', 'clap', 'crouch', 'jump', 'walk', 'run', 'shake hands', 'hug', 'kiss', 'fight')
-y_labels = []
-for i in range(len(training_labels)):
-	y_labels.append(names[int(training_labels[i])-1])
-y_labels = np.array(y_labels)
-
-import pandas as pd
-bothy = np.vstack((training_clusters, y_labels)).T
-yp = pd.DataFrame(bothy, columns=['y_test','label'])
-freq = pd.pivot_table(yp, rows='y_test', cols='label', aggfunc=len, fill_value=0)
-pct = np.multiply(freq, (1 / freq.sum(axis=1)).reshape((freq.shape[0], 1)))
-# pct.to_csv(data_dir + "clusters_and_labels.csv")

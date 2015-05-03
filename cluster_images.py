@@ -57,7 +57,6 @@ class Cluster(object):
 
 		# apply dimension reduction to data
 		x_reduc = self.dim_reduc.transform(x)
-		del x
 
 		# apply unsupervised clustering on each image.
 		self.cluster = KMeans(n_clusters=self.n_clusters, n_jobs=self.n_jobs).fit(x_reduc)
@@ -76,5 +75,6 @@ class Cluster(object):
 		x_reduc = self.dim_reduc.transform(x)
 
 		# apply unsupervised clustering on each image using trained model
-		cluster_labels = self.cluster.predict(x_reduc)
+		# set cluster labels to start at 1
+		cluster_labels = self.cluster.predict(x_reduc) + 1
 		return cluster_labels
