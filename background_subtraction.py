@@ -1,10 +1,11 @@
 from __future__ import division
 import numpy as np
-import cv2
 from helper_funcs import matrix_to_image, image_to_matrix
-from sklearn.decomposition import RandomizedPCA
+from sklearn.decomposition import TruncatedSVD
 from scipy.ndimage.measurements import label
+from scipy.ndimage import gaussian_filter
 from scipy import ndimage
+from sklearn.preprocessing import StandardScaler
 
 
 def background_model(x_train, method='mean', n_components=10):
@@ -15,28 +16,28 @@ def background_model(x_train, method='mean', n_components=10):
 	:return: a vector that represents the background image
 	"""
 	# clean the data before pca and clustering (subtract mean, divide by st. dev.)
-	# scaler = preprocessing.StandardScaler().fit(x_train)
-	# x_train = scaler.transform(x_train)
-	# perform principal component analysis on the training images
-	pca = RandomizedPCA(n_components=n_components).fit(x_train)
-	# print sum(pca.explained_variance_ratio_)
-	train_pca = pca.transform(x_train)
+	scaler = StandardScaler().fit(x_train)
+	x_train = scaler.transform(x_train)
+	# use SVD instead of PCA, so that don't need to compute covariance
+	eig = TruncatedSVD(n_components=n_components).fit(x_train)
+	print sum(eig.explained_variance_ratio_)
+	train = eig.transform(x_train)
 
 	# define background as an aggregation of each pixel value in the principal component space
 	# can't see much of a difference between mean and median
 	if method == 'median':
-		back_pca = np.median(train_pca, axis=0)
+		back_pca = np.median(train, axis=0)
 	elif method == 'mean':
-		back_pca = np.mean(train_pca, axis=0)
+		back_pca = np.mean(train, axis=0)
 	else:
 		print "method must either be 'median' or 'mean'"
 		return 1
 
 	# transform to full sized matrix
-	back_vec = pca.inverse_transform(back_pca)
+	back_vec = eig.inverse_transform(back_pca)
 	# add mean and variance back in
-	# back_vec = scaler.inverse_transform(back_vec)
-	return back_vec.reshape((1, len(back_vec)))
+	back_vec = scaler.inverse_transform(back_vec)
+	return back_vec
 
 
 def foreground_mask(back_vec, x, back_thres=.25):
@@ -94,17 +95,23 @@ def eigenback(back_vec, x, back_thres=.25, fore_thres=.1, rval='fore_mat', blur=
 	mask_array = matrix_to_image(fore_mask)
 	for i in range(fore_mask.shape[0]):
 		img = mask_array[:, :, i]
+
+		if blur:
+			img = gaussian_filter(img, sigma=1, order=0, truncate=1)
+			img[img > 0.01] = 1
+			img = np.round(img)
+
 		# assign a label to each pixel in a connected region (including diagonal connections)
 		label_im, nb_labels = label(img, structure=np.array([[1,1,1], [1,1,1], [1,1,1]]))
 		# how many pixels are in each region?
 		sizes = ndimage.sum(img, label_im, range(nb_labels + 1))
-		# keep only regions containing at least <fore_thres> largest foreground region
+		# keep only regions containing at least fore_thres largest foreground region
 		mask_size = sizes < (sizes.max() * fore_thres)
 		remove_pixel = mask_size[label_im]
 		img[remove_pixel] = 0
-		if blur == True:
-			img = cv2.GaussianBlur(img, (15, 15), 0)
-			img /= img.max()
+
+
+
 		mask_array[:, :, i] = img
 
 	if rval == 'fore_mat':

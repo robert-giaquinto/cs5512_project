@@ -2,12 +2,11 @@ from __future__ import division
 import math
 import random
 import numpy as np
-from skimage import transform as tf
-from helper_funcs import matrix_to_image, image_to_matrix
-from background_subtraction import background_model, foreground_mask, eigenback
+import scipy.ndimage.interpolation as im
+from helper_funcs import image_to_matrix
 
 
-def distorted_image_set(imgs, labels, num_runs=10, data_dir=None):
+def distorted_image_set(imgs, num_runs=10, data_dir=None, filename='distorted_matrix.csv', verbose=True):
 	"""
 	Take a set of images and randomly distort them num_runs times.
 	The result should be a training data set that is more robust to new images
@@ -23,27 +22,29 @@ def distorted_image_set(imgs, labels, num_runs=10, data_dir=None):
 	# convert x_train to an image array
 	num_imgs = imgs.shape[2]
 	if data_dir is None:
-		distorted_matrix = np.zeros([num_imgs * num_runs, imgs.shape[0] * imgs.shape[1]])
+		distorted_matrix = np.zeros([num_imgs * (num_runs+1), imgs.shape[0] * imgs.shape[1]])
+		# append original images too
+		distorted_matrix[0:num_imgs, :] = image_to_matrix(imgs)
 
 	for r in range(num_runs):
 		distorted = image_to_matrix(randomly_distort_images(imgs))
 		if data_dir is not None:
-			# save result to disk
 			if r == 0:
-				np.savetxt(data_dir + "distorted_matrix.csv", distorted, fmt='%1.3f', delimiter=",")
-			else:
-				with open(data_dir + "distorted_matrix.csv", 'a') as f_handle:
-					np.savetxt(f_handle, distorted, fmt='%1.3f', delimiter=",")
+				# also save original
+				np.savetxt(data_dir + filename, image_to_matrix(imgs), fmt='%1.3f', delimiter=",")
+			# save result to disk (add to current results
+			with open(data_dir + filename, 'a') as f_handle:
+				np.savetxt(f_handle, distorted, fmt='%1.3f', delimiter=",")
 		else:
 			# store in a matrix
-			start_index = r * num_imgs
+			start_index = (r+1) * num_imgs
 			end_index = start_index + num_imgs
 			distorted_matrix[start_index:end_index, :] = distorted
-		print "done with run", r
+		if verbose:
+			print "done with run", r
 
 	if data_dir is None:
-		y = np.repeat(labels, num_runs)
-		return distorted_matrix, y
+		return distorted_matrix
 
 
 def randomly_distort_images(img_array):
@@ -68,18 +69,18 @@ def randomly_distort_images(img_array):
 	for i in range(num_frames):
 		# 0. begin by centering the foreground in the middle of the frame
 		img = img_array[:, :, i]
-		old_center = image_center(img) # (row, col)
+		old_center = image_center(img)  # (row, col)
 		frame_center = np.array([[img.shape[0]/2], [img.shape[1]/2]])
-		shift = np.round(np.subtract(frame_center, old_center))
-		trans_tform = tf.SimilarityTransform(scale=1, translation=(shift[1], shift[0]))
-		img = tf.warp(img, trans_tform.inverse)
+		translation = np.round(np.subtract(frame_center, old_center)).flatten()
+		img = im.shift(img, (translation[0], translation[1]))
 
 		# 1. randomly select a rotation amount
 		# randomly select a rotation angle between -40 to 41 degrees
 		rotation_range = (np.arange(-30, 31, 1)/360) * 2 * math.pi
 		rotation = random.choice(rotation_range)
 		# rotate the image and save the result
-		rotated_img = rotate_image(img, rotation=rotation)
+		# and normalize result to be zeros and ones
+		rotated_img = normalize(im.rotate(img, (rotation * 360 / (math.pi * 2)), reshape=False))
 
 		# 2. randomly select a reasonable scaling amount
 		# find max amount that the image can be scaled without cropping
@@ -99,7 +100,8 @@ def randomly_distort_images(img_array):
 		scale_range = np.arange(.5, scale_max + .01, .01)
 		if len(scale_range) != 0:
 			scale = round(random.choice(scale_range), 2)
-			rotated_scaled_img = scale_image(rotated_img, scale)
+			# apply transformation and normalize results
+			rotated_scaled_img = normalize(scale_image(rotated_img, scale))
 		else:
 			rotated_scaled_img = rotated_img
 
@@ -107,74 +109,31 @@ def randomly_distort_images(img_array):
 		# y_shift = reasonable translations along vertical axis
 		row_total = rotated_scaled_img.sum(axis=1)
 		row_active = np.where(row_total > 0)[0]
-		y_shift_range = np.hstack((
+		row_shift_range = np.hstack((
 			np.arange(-1, -1 * row_active.min(), -5),
 			np.arange(1, img.shape[0] - row_active.max(), 5)
 		))
 		# x_shift = reasonable translations along horizontal axis
 		col_total = rotated_scaled_img.sum(axis=0)
 		col_active = np.where(col_total > 0)[0]
-		x_shift_range = np.hstack((
+		col_shift_range = np.hstack((
 			np.arange(-1, -1 * col_active.min(), -5),
 			np.arange(1, img.shape[1] - col_active.max(), 5)
 		))
 		# randomly select a pair of reasonable shifts in either direction
-		if len(y_shift_range) != 0:
-			y_shift = random.choice(y_shift_range)
+		if len(row_shift_range) != 0:
+			row_shift = random.choice(row_shift_range)
 		else:
-			y_shift = 0
-		if len(x_shift_range) != 0:
-			x_shift = random.choice(x_shift_range)
+			row_shift = 0
+		if len(col_shift_range) != 0:
+			col_shift = random.choice(col_shift_range)
 		else:
-			x_shift = 0
-		distorted_img = translate_image(rotated_scaled_img, (x_shift, y_shift))
+			col_shift = 0
+		distorted_img = normalize(im.shift(rotated_scaled_img, (row_shift, col_shift)))
 
 		# save final results
 		distorted_img_array[:, :, i] = distorted_img
 	return distorted_img_array
-
-
-def rotate_image(img, rotation):
-	"""
-	low level function to rotate a single image.
-	This function finds the translation necessary to keep the image centered
-	in order to keep the image from being cropped.
-	:param img:
-	:param rotation: counter-clockwise rotation in radians (e.g. math.pi / 4)
-	:return:
-	"""
-	# need to pad the image before scaling it
-	pad_width = 250
-	padded_img = np.lib.pad(img, pad_width, pad_image)
-
-	# define a rotation matrix
-	rot_mat = np.array([
-			[math.cos(rotation), math.sin(rotation) * -1],
-			[math.sin(rotation), math.cos(rotation)]
-		])
-	# find how far the rotation will off-center the image:
-	img_center = np.array([[padded_img.shape[0]/2], [padded_img.shape[1]/2]]) # (row, col)
-	old_center = image_center(padded_img) # (row, col)
-	rotated_center = rot_mat.T.dot(old_center)
-	# translate the result so the center of mass is in center of image
-	shift = np.round(np.subtract(rotated_center, img_center))
-	# rotate then transform the image
-	rot_tform = tf.SimilarityTransform(rotation=rotation)
-	trans_tform = tf.SimilarityTransform(translation=(shift[0], shift[1]))
-	padded_rotated_img = tf.warp(tf.warp(padded_img, rot_tform.inverse), trans_tform.inverse)
-	# unpad the image
-	return unpad_image(padded_rotated_img, pad_width)
-
-
-def pad_image(img, pad_width, iaxis, kwargs):
-	img[:pad_width[0]] = 0
-	img[-pad_width[1]:] = 0
-	return img
-
-
-def unpad_image(img, pad_width):
-	old_shape = (img.shape[0] - (2 * pad_width), img.shape[1] - (2 * pad_width))
-	return img[pad_width:(pad_width + old_shape[0]), pad_width:(pad_width + old_shape[1])]
 
 
 def scale_image(img, scale):
@@ -183,30 +142,22 @@ def scale_image(img, scale):
 	This function also finds the necessary translation such that the image
 	is still centered after being re-scaled
 	:param img: an image of size x-pixels by y-pixels
-	:param scale: an inverted number representing a scaling factor
-		e.g. to increase size by 25%, scale = 1/1.25
+	:param scale:  scaling factor
 	:return:
 	"""
-	# need to pad the image before scaling it
-	pad_width = max(int(round((max(img.shape) * scale) - max(img.shape))), 250)
-	padded_img = np.lib.pad(img, pad_width, pad_image)
-	transformation = tf.SimilarityTransform(scale=scale)
-	padded_scaled_img = tf.warp(padded_img, transformation.inverse)
-
-	# next, determine how much to translate the image to keep it centered
-	current_center = image_center(padded_scaled_img) # (row, col)
-	desired_center = image_center(padded_img) # (row, col)
-	shift = np.round(np.subtract(desired_center, current_center))
-	# translate image to back to center
-	transformation = tf.SimilarityTransform(translation=(shift[0], shift[1]))
-	padded_centered_img = tf.warp(padded_scaled_img, transformation.inverse)
-	# unpad the image back to its original dimensions and return it
-	return unpad_image(padded_centered_img, pad_width)
-
-
-def translate_image(img, translation):
-	transformation = tf.SimilarityTransform(scale=1, translation=translation)
-	return tf.warp(img, transformation.inverse)
+	new_img = np.round(im.zoom(img, zoom=scale), decimals=4)
+	if scale < 1:
+		# pad
+		x_start = math.floor((img.shape[0] - new_img.shape[0])/2)
+		y_start = math.floor((img.shape[1] - new_img.shape[1])/2)
+		rval = np.zeros(img.shape)
+		rval[x_start:(x_start + new_img.shape[0]), y_start:(y_start + new_img.shape[1])] = new_img
+	else:
+		# crop
+		x_start = (new_img.shape[0] - img.shape[0])/2
+		y_start = (new_img.shape[1] - img.shape[1])/2
+		rval = new_img[x_start:(x_start + img.shape[0]), y_start:(y_start + img.shape[1])]
+	return rval
 
 
 def image_center(img):
@@ -227,3 +178,12 @@ def image_center(img):
 	col_weight = (img != 0).sum(axis=0) / foreground_size
 	col_center_of_mass = np.where(col_weight.cumsum() >= 0.5)[0][0]
 	return np.array([[row_center_of_mass], [col_center_of_mass]])
+
+
+def normalize(img):
+	# normalize the result
+	img = img - img.min()
+	img = img / img.max()
+	img[img > .5] = 1
+	img[img < 1] = 0
+	return img
